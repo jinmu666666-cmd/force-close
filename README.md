@@ -4,7 +4,7 @@
 
 ## 下载最新版
 
-前往 [GitHub 最新版本](https://github.com/jinmu666666-cmd/force-close/releases/latest)，下载附件 `ForceClose.exe`，双击运行。无需安装 Python。首次运行会请求管理员权限；如不授权，仍可使用普通权限，但部分窗口和进程无法操作。
+[直接下载最新版 ForceClose.exe](https://github.com/jinmu666666-cmd/force-close/releases/latest/download/ForceClose.exe)，或查看 [最新版本发布页](https://github.com/jinmu666666-cmd/force-close/releases/latest)。双击运行，无需安装 Python。首次运行会请求管理员权限；如不授权，仍可使用普通权限，但部分窗口和进程无法操作。
 
 ## 使用
 
