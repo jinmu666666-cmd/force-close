@@ -12,6 +12,7 @@ from pathlib import Path
 from tkinter import messagebox
 
 import psutil
+import win32api
 import win32com.client
 import win32con
 import win32gui
@@ -29,6 +30,15 @@ IGNORED_CLASSES = {"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWn
 GA_ROOT = 2
 GW_HWNDNEXT = 2
 WM_CLOSE = 0x0010
+CARD_WIDTH, CARD_HEIGHT = 264, 56
+
+
+def card_position(center_x, center_y, work):
+    left, top, right, bottom = work
+    x = min(max(center_x - 32, left + 4), right - CARD_WIDTH - 4)
+    below, above = center_y + 38, center_y - 38 - CARD_HEIGHT
+    y = below if below + CARD_HEIGHT <= bottom - 4 else above
+    return x, min(max(y, top + 4), bottom - CARD_HEIGHT - 4)
 
 
 def is_admin():
@@ -197,7 +207,10 @@ class WindowCloser:
         self.root.attributes("-topmost", True)
         self.root.configure(bg=self.KEY)
         self.root.attributes("-transparentcolor", self.KEY)
-        self.root.geometry("64x64+60+110")
+        work = win32api.GetMonitorInfo(win32api.MonitorFromPoint(
+            (0, 0), win32con.MONITOR_DEFAULTTOPRIMARY))["Work"]
+        start_x, start_y = (work[0] + work[2] - 64) // 2, (work[1] + work[3] - 64) // 2
+        self.root.geometry(f"64x64+{start_x}+{start_y}")
         icon = Path(__file__).with_name("强制关闭-准星.ico")
         if icon.exists():
             self.root.iconbitmap(str(icon))
@@ -207,6 +220,7 @@ class WindowCloser:
         self.notice = ""
         self.menu_open = False
         self.hover = False
+        self.flash_until = 0
         self.top_job = None
         self.refresh_job = None
         self.show_details = tk.BooleanVar(value=False)
@@ -218,35 +232,54 @@ class WindowCloser:
         self.canvas.bind("<Button-3>", self.menu)
         self.canvas.bind("<Enter>", self.enter)
         self.canvas.bind("<Leave>", self.leave)
-        self.resize()
+        self.card = tk.Toplevel(root)
+        self.card.overrideredirect(True)
+        self.card.attributes("-topmost", True)
+        self.card_canvas = tk.Canvas(self.card, width=CARD_WIDTH, height=CARD_HEIGHT,
+                                     bg="#17243c", highlightthickness=0, bd=0)
+        self.card_canvas.pack()
+        self.card_canvas.bind("<Button-3>", self.menu)
+        self.card.withdraw()
         # shortcut: this 64px invisible hit area also catches nearby clicks; shrink it if it blocks adjacent controls.
         self.hitbox = tk.Toplevel(root)
         self.hitbox.overrideredirect(True)
         self.hitbox.configure(bg=self.KEY)
         self.hitbox.attributes("-alpha", 0.01)
         self.hitbox.attributes("-topmost", True)
-        self.hitbox.geometry("64x64+60+110")
+        self.hitbox.geometry(f"64x64+{start_x}+{start_y}")
         for event_name, handler in (("<ButtonPress-1>", self.press), ("<B1-Motion>", self.move),
-                                    ("<ButtonRelease-1>", self.release), ("<Button-3>", self.menu)):
+                                    ("<ButtonRelease-1>", self.release), ("<Double-Button-1>", self.double_click),
+                                    ("<Button-3>", self.menu), ("<Enter>", self.enter), ("<Leave>", self.leave)):
             self.hitbox.bind(event_name, handler)
+        self.canvas.bind("<Double-Button-1>", self.double_click)
         self.root.update_idletasks()
         self.hwnd = top_level(root.winfo_id())
         self.hitbox_hwnd = top_level(self.hitbox.winfo_id())
+        self.card_hwnd = top_level(self.card.winfo_id())
+        self.resize()
         self.keep_on_top()
         self.refresh()
 
     def resize(self):
-        width, height = (270, 128) if self.show_details.get() else (64, 64)
-        self.root.geometry(f"{width}x{height}")
-        self.canvas.configure(width=width, height=height)
-        if hasattr(self, "hitbox"):
-            self.position_hitbox()
+        if self.show_details.get():
+            self.card.deiconify()
+            self.position_card()
+        else:
+            self.card.withdraw()
         self.draw()
-        if hasattr(self, "hwnd"):
-            self.raise_top()
+        self.raise_top()
 
     def position_hitbox(self):
         self.hitbox.geometry(f"64x64+{self.root.winfo_x()}+{self.root.winfo_y()}")
+
+    def position_card(self, x=None, y=None):
+        x = self.root.winfo_x() if x is None else x
+        y = self.root.winfo_y() if y is None else y
+        work = win32api.GetMonitorInfo(win32api.MonitorFromPoint((x + 32, y + 32),
+                                      win32con.MONITOR_DEFAULTTONEAREST))["Work"]
+        card_x, card_y = card_position(x + 32, y + 32, work)
+        win32gui.SetWindowPos(self.card_hwnd, 0, card_x, card_y, CARD_WIDTH, CARD_HEIGHT,
+                              win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
 
     def raise_top(self):
         if not self.menu_open:
@@ -255,6 +288,9 @@ class WindowCloser:
                                       win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
                 win32gui.SetWindowPos(self.hitbox_hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
                                       win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
+                if self.show_details.get():
+                    win32gui.SetWindowPos(self.card_hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                                          win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
             except OSError:
                 pass
 
@@ -273,9 +309,9 @@ class WindowCloser:
     def draw(self):
         c = self.canvas
         c.delete("all")
-        accent = "#ff5964" if self.target else "#ef4444"
-        if self.hover:
-            accent = "#ff8a91"
+        accent = ("#ef4444" if time.time() < self.flash_until else
+                  "#22c55e" if self.drag_start and self.drag_start[4] else
+                  "#facc15" if self.hover else "#3b82f6")
         x, y = self.PROBE_X, self.PROBE_Y
         c.create_line(x - 14, y, x - 5, y, fill=accent, width=2)
         c.create_line(x + 5, y, x + 14, y, fill=accent, width=2)
@@ -283,17 +319,20 @@ class WindowCloser:
         c.create_line(x, y + 5, x, y + 14, fill=accent, width=2)
         c.create_oval(x - 2, y - 2, x + 2, y + 2, fill=accent, outline=accent)
         if self.show_details.get():
-            c.create_rectangle(3, 70, 267, 125, fill="#17243c", outline="#354766", width=1)
+            c = self.card_canvas
+            c.delete("all")
+            c.create_rectangle(1, 1, CARD_WIDTH - 1, CARD_HEIGHT - 1,
+                               fill="#17243c", outline="#354766", width=1)
             if time.time() < self.notice_until:
-                line1, line2 = self.notice[:35], "拖动准星定位 · 左键关闭 · 右键更多"
+                line1, line2 = self.notice[:35], "拖动定位 · 双击关闭 · 右键更多"
             elif self.target:
                 line1 = f'{self.target["name"]}  ·  PID {self.target["pid"]}'
                 line2 = (self.target["title"] or "无标题窗口")[:34]
             else:
                 line1, line2 = "下方没有可操作窗口", "把准心对准需要处理的窗口"
-            c.create_text(14, 87, text=line1, fill="#e8ecff", anchor="w",
+            c.create_text(11, 17, text=line1, fill="#e8ecff", anchor="w",
                           font=("Microsoft YaHei UI", 9, "bold"))
-            c.create_text(14, 110, text=line2, fill="#aab2ca", anchor="w",
+            c.create_text(11, 40, text=line2, fill="#aab2ca", anchor="w",
                           font=("Microsoft YaHei UI", 8))
 
     def target_below(self):
@@ -315,6 +354,8 @@ class WindowCloser:
 
     def press(self, event):
         self.drag_start = (event.x_root, event.y_root, self.root.winfo_x(), self.root.winfo_y(), False)
+        self.hover = True
+        self.draw()
 
     def move(self, event):
         if self.drag_start:
@@ -322,16 +363,24 @@ class WindowCloser:
             if abs(event.x_root - x) + abs(event.y_root - y) > 5:
                 self.drag_start = (x, y, left, top, True)
             next_x, next_y = left + event.x_root - x, top + event.y_root - y
-            self.root.geometry(f'+{next_x}+{next_y}')
-            self.hitbox.geometry(f'+{next_x}+{next_y}')
+            flags = win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
+            win32gui.SetWindowPos(self.hwnd, 0, next_x, next_y, 0, 0, flags)
+            win32gui.SetWindowPos(self.hitbox_hwnd, 0, next_x, next_y, 0, 0, flags)
+            if self.show_details.get():
+                self.position_card(next_x, next_y)
+            self.draw()
 
     def release(self, _event):
         if not self.drag_start:
             return
-        dragged = self.drag_start[4]
         self.drag_start = None
-        if not dragged:
-            self.close_window(self.target_below())
+        self.draw()
+
+    def double_click(self, _event):
+        self.drag_start = None
+        self.flash_until = time.time() + 0.7
+        self.draw()
+        self.close_window(self.target_below())
 
     def close_window(self, target):
         if not target or not still_same(target):
