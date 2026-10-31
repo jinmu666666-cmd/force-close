@@ -31,6 +31,7 @@ GA_ROOT = 2
 GW_HWNDNEXT = 2
 WM_CLOSE = 0x0010
 CARD_WIDTH, CARD_HEIGHT = 264, 56
+HIT_SIZE, HIT_INSET = 48, 8
 
 
 def card_position(center_x, center_y, work):
@@ -240,13 +241,13 @@ class WindowCloser:
         self.card_canvas.pack()
         self.card_canvas.bind("<Button-3>", self.menu)
         self.card.withdraw()
-        # shortcut: this 64px invisible hit area also catches nearby clicks; shrink it if it blocks adjacent controls.
+        # shortcut: this invisible hit area also catches nearby clicks; shrink it if it blocks adjacent controls.
         self.hitbox = tk.Toplevel(root)
         self.hitbox.overrideredirect(True)
         self.hitbox.configure(bg=self.KEY)
         self.hitbox.attributes("-alpha", 0.01)
         self.hitbox.attributes("-topmost", True)
-        self.hitbox.geometry(f"64x64+{start_x}+{start_y}")
+        self.hitbox.geometry(f"{HIT_SIZE}x{HIT_SIZE}+{start_x + HIT_INSET}+{start_y + HIT_INSET}")
         for event_name, handler in (("<ButtonPress-1>", self.press), ("<B1-Motion>", self.move),
                                     ("<ButtonRelease-1>", self.release), ("<Double-Button-1>", self.double_click),
                                     ("<Button-3>", self.menu), ("<Enter>", self.enter), ("<Leave>", self.leave)):
@@ -270,7 +271,7 @@ class WindowCloser:
         self.raise_top()
 
     def position_hitbox(self):
-        self.hitbox.geometry(f"64x64+{self.root.winfo_x()}+{self.root.winfo_y()}")
+        self.hitbox.geometry(f"{HIT_SIZE}x{HIT_SIZE}+{self.root.winfo_x() + HIT_INSET}+{self.root.winfo_y() + HIT_INSET}")
 
     def position_card(self, x=None, y=None):
         x = self.root.winfo_x() if x is None else x
@@ -365,7 +366,7 @@ class WindowCloser:
             next_x, next_y = left + event.x_root - x, top + event.y_root - y
             flags = win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
             win32gui.SetWindowPos(self.hwnd, 0, next_x, next_y, 0, 0, flags)
-            win32gui.SetWindowPos(self.hitbox_hwnd, 0, next_x, next_y, 0, 0, flags)
+            win32gui.SetWindowPos(self.hitbox_hwnd, 0, next_x + HIT_INSET, next_y + HIT_INSET, 0, 0, flags)
             if self.show_details.get():
                 self.position_card(next_x, next_y)
             self.draw()
