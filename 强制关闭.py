@@ -406,6 +406,38 @@ class WindowCloser:
         except (psutil.Error, OSError) as error:
             messagebox.showerror("结束进程失败", str(error), parent=self.root)
 
+    def kill_related(self, target):
+        if not target or not still_same(target):
+            self.tell("进程已变化，请重新定位")
+            return
+        try:
+            parent = psutil.Process(target["pid"])
+            processes = parent.children(recursive=True) + [parent]
+            if any(item.pid in (0, 4, os.getpid()) for item in processes):
+                self.tell("目标进程树包含本工具或系统进程，已取消")
+                return
+            if not messagebox.askyesno("关闭所有相关进程",
+                                       f'将结束 {target["name"]} 及其 {len(processes) - 1} 个子进程。\n'
+                                       "这些进程未保存的内容会丢失。确定继续？", parent=self.root):
+                return
+            if not still_same(target):
+                self.tell("进程已变化，请重新定位")
+                return
+            failed = []
+            for process in processes:
+                try:
+                    process.kill()
+                except psutil.NoSuchProcess:
+                    pass
+                except (psutil.AccessDenied, OSError) as error:
+                    failed.append(f"{process.pid}: {error}")
+            if failed:
+                messagebox.showerror("部分进程未结束", "\n".join(failed[:8]), parent=self.root)
+            else:
+                self.tell(f"已结束 {len(processes)} 个相关进程")
+        except (psutil.Error, OSError) as error:
+            messagebox.showerror("结束相关进程失败", str(error), parent=self.root)
+
     def disable(self, entry):
         try:
             disable_startup(entry)
@@ -420,16 +452,31 @@ class WindowCloser:
         except (OSError, RuntimeError, ValueError) as error:
             messagebox.showerror("恢复失败", str(error), parent=self.root)
 
+    def style_menus(self):
+        if not self.menu_open:
+            return
+        def style(hwnd, _):
+            if win32gui.GetClassName(hwnd) == "#32768" and win32process.GetWindowThreadProcessId(hwnd)[1] == os.getpid():
+                current = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, current | win32con.WS_EX_LAYERED)
+                ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, 0, 224, 2)
+        win32gui.EnumWindows(style, None)
+        self.root.after(80, self.style_menus)
+
     def menu(self, event):
         target = self.target_below()
-        menu = tk.Menu(self.root, tearoff=False)
+        colors = {"background": "#173b78", "foreground": "#eaf2ff",
+                  "activebackground": "#2563eb", "activeforeground": "#ffffff"}
+        menu = tk.Menu(self.root, tearoff=False, **colors)
         if target:
             menu.add_command(label=f'{target["name"]}  ·  PID {target["pid"]}', state="disabled")
             menu.add_command(label=(target["title"] or "无标题窗口")[:50], state="disabled")
             menu.add_separator()
             menu.add_command(label="关闭准心下的窗口", command=lambda t=target: self.close_window(t))
             menu.add_command(label="强制结束进程（未保存内容会丢失）", command=lambda t=target: self.kill_process(t))
-            startup = tk.Menu(menu, tearoff=False)
+            menu.add_command(label="关闭所有相关进程（当前进程及子进程）",
+                             command=lambda t=target: self.kill_related(t))
+            startup = tk.Menu(menu, tearoff=False, **colors)
             try:
                 entries = startup_entries(target["path"])
                 for entry in entries:
@@ -444,7 +491,7 @@ class WindowCloser:
         try:
             records = read_backups()
             if records:
-                restore_menu = tk.Menu(menu, tearoff=False)
+                restore_menu = tk.Menu(menu, tearoff=False, **colors)
                 for record in records[-20:]:
                     restore_menu.add_command(label=record["label"], command=lambda r=record: self.restore(r))
                 menu.add_cascade(label="恢复已禁用的自启动", menu=restore_menu)
@@ -457,6 +504,7 @@ class WindowCloser:
         menu.add_command(label="退出工具", command=self.close)
         self.menu_open = True
         try:
+            self.root.after(20, self.style_menus)
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
